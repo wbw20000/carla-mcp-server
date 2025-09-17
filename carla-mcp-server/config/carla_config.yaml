@@ -1,0 +1,41 @@
+carla:
+  path: "D:/carlaue4.0.9.15/WindowsNoEditor"
+  executable: "CarlaUE4.exe"
+  host: "localhost"
+  port: 2000
+  timeout: 30
+  default_quality: "Low"  # Low/Epic
+
+window:
+  windowed: true
+  width: 800
+  height: 600
+
+traffic:
+  default_vehicles: 30
+  default_walkers: 10
+  safe_distance: 2.0
+  vehicle_filter: "vehicle.*"
+  walker_filter: "walker.pedestrian.*"
+
+maps:
+  available:
+    - "Town01"
+    - "Town02"
+    - "Town03"
+    - "Town04"
+    - "Town05"
+    - "Town10HD"
+  default: "Town01"
+
+weather:
+  presets:
+    - "ClearNoon"
+    - "CloudyNoon"
+    - "WetNoon"
+    - "HardRainNoon"
+    - "ClearSunset"
+    - "CloudySunset"
+    - "WetSunset"
+    - "HardRainSunset"
+  default: "ClearNoon"

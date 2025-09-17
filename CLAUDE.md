@@ -60,3 +60,4 @@ All components use async programming with Python's asyncio. The FastMCP framewor
 - **Health Monitoring**: HTTP endpoint available for service health checks
 - carla的UE4版本，版本号0.9.15，已经安装。安装的路径为D:\carlaue4.0.9.15\WindowsNoEditor
 - 用中文回答用户问题
+- 记住每次启动carla的任何任务以及carla mcp server前，检查是否启动了C:\project2025\mcpserver\carla-mcp-server目录下的虚拟环境

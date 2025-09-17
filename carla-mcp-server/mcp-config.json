@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "carla-mcp-server": {
+      "command": [
+        "C:\\project2025\\mcpserver\\carla-mcp-server\\carla-mcp-venv\\Scripts\\python.exe",
+        "C:\\project2025\\mcpserver\\carla-mcp-server\\src\\mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "C:\\project2025\\mcpserver\\carla-mcp-server\\src"
+      }
+    },
+    "carla-mcp-server-http": {
+      "description": "CARLA仿真器MCP服务器 - HTTP模式",
+      "transport": {
+        "type": "http",
+        "baseUrl": "http://localhost:8000"
+      }
+    }
+  }
+}
