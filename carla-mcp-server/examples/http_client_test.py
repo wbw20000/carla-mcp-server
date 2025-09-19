@@ -12,7 +12,7 @@ from typing import Dict, Any
 class CarlaHttpClient:
     """CARLA MCP HTTP客户端"""
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8002"):
         self.base_url = base_url
         self.mcp_url = f"{base_url}/mcp"
 

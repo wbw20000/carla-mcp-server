@@ -141,7 +141,8 @@ class CarlaManager:
                     self.config["carla"]["host"],
                     self.config["carla"]["port"]
                 )
-                self.client.set_timeout(2.0)
+                client_timeout = self.config["carla"].get("client_timeout", 10.0)
+                self.client.set_timeout(client_timeout)
 
                 # 尝试获取版本信息来测试连接
                 version = self.client.get_client_version()
@@ -169,6 +170,9 @@ class CarlaManager:
                 self.traffic_manager = None
 
             # 终止进程
+            terminated = False
+
+            # 首先尝试终止自己启动的进程
             if self.process:
                 self.process.terminate()
                 try:
@@ -179,8 +183,29 @@ class CarlaManager:
 
                 self.logger.info(f"CARLA process {self.process.pid} terminated")
                 self.process = None
+                terminated = True
 
-            return {"status": "stopped", "message": "CARLA已停止"}
+            # 查找并终止所有CARLA进程
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if 'CarlaUE4' in proc.info['name']:
+                        self.logger.info(f"Terminating CARLA process {proc.info['pid']}")
+                        psutil.Process(proc.info['pid']).terminate()
+                        terminated = True
+                        # 等待进程结束
+                        try:
+                            psutil.Process(proc.info['pid']).wait(timeout=5)
+                        except psutil.TimeoutExpired:
+                            # 如果超时，强制结束
+                            psutil.Process(proc.info['pid']).kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                    self.logger.debug(f"Could not terminate process: {e}")
+                    continue
+
+            if terminated:
+                return {"status": "stopped", "message": "CARLA已停止"}
+            else:
+                return {"status": "not_running", "message": "CARLA未在运行"}
 
         except Exception as e:
             self.logger.error(f"Error stopping CARLA: {e}")
@@ -200,6 +225,45 @@ class CarlaManager:
                 continue
 
         return False
+
+    def is_connected(self) -> bool:
+        """检查是否已连接到CARLA"""
+        return self.client is not None and self.world is not None
+
+    def connect_to_carla(self) -> Dict:
+        """连接到已运行的CARLA服务器"""
+        try:
+            if not carla:
+                return {"status": "error", "message": "CARLA Python API not available"}
+
+            self.client = carla.Client(
+                self.config["carla"]["host"],
+                self.config["carla"]["port"]
+            )
+            client_timeout = self.config["carla"].get("client_timeout", 10.0)
+            self.client.set_timeout(client_timeout)
+
+            # 测试连接
+            version = self.client.get_client_version()
+            self.world = self.client.get_world()
+
+            # 初始化TrafficManager
+            self.traffic_manager = self.client.get_trafficmanager(
+                self.config["carla"]["port"] + 6000
+            )
+
+            self.logger.info(f"Connected to CARLA {version}")
+            return {
+                "status": "success",
+                "message": f"Connected to CARLA {version}",
+                "map": self.world.get_map().name
+            }
+
+        except Exception as e:
+            self.logger.error(f"Failed to connect to CARLA: {e}")
+            self.client = None
+            self.world = None
+            return {"status": "error", "message": f"Failed to connect: {str(e)}"}
 
     def generate_traffic(self, num_vehicles: int = None, num_walkers: int = None, danger: bool = False) -> Dict:
         """生成交通流（基于CARLA官方示例）"""
@@ -232,14 +296,28 @@ class CarlaManager:
         """生成车辆"""
         blueprint_library = self.world.get_blueprint_library()
         vehicle_blueprints = blueprint_library.filter("vehicle.*")
-        spawn_points = self.world.get_map().get_spawn_points()
 
-        if num_vehicles > len(spawn_points):
-            self.logger.warning(f"Requested {num_vehicles} vehicles but only {len(spawn_points)} spawn points available")
-            num_vehicles = len(spawn_points)
+        # 改进：使用道路waypoints作为生成点，确保车辆生成在车道上
+        game_map = self.world.get_map()
+        waypoints = game_map.generate_waypoints(distance=30.0)  # 每30米一个点
+
+        # 过滤出主要道路上的waypoints（排除人行道等）
+        valid_spawn_points = []
+        for waypoint in waypoints:
+            if waypoint.lane_type == carla.LaneType.Driving:
+                # 确保waypoint在道路上而不是交叉路口
+                if not waypoint.is_junction:
+                    spawn_transform = waypoint.transform
+                    spawn_transform.location.z += 0.5  # 稍微抬高避免碰撞
+                    valid_spawn_points.append(spawn_transform)
+
+        if num_vehicles > len(valid_spawn_points):
+            self.logger.warning(f"Requested {num_vehicles} vehicles but only {len(valid_spawn_points)} valid spawn points available")
+            num_vehicles = len(valid_spawn_points)
 
         # 随机选择生成点
-        random.shuffle(spawn_points)
+        random.shuffle(valid_spawn_points)
+        spawn_points = valid_spawn_points
 
         batch_commands = []
         for i in range(num_vehicles):
@@ -272,13 +350,25 @@ class CarlaManager:
                 self.vehicles.append(vehicle)
 
                 # 设置自动驾驶
-                vehicle.set_autopilot(True, self.config["carla"]["port"] + 6000)
+                tm_port = self.config["carla"]["port"] + 6000
+                vehicle.set_autopilot(True, tm_port)
 
-                # 如果启用危险模式
-                if danger and self.traffic_manager:
-                    self.traffic_manager.ignore_lights_percentage(vehicle, 100)
-                    self.traffic_manager.ignore_signs_percentage(vehicle, 100)
-                    self.traffic_manager.ignore_vehicles_percentage(vehicle, 50)
+                # 配置TrafficManager参数以确保正常行驶
+                if self.traffic_manager:
+                    # 设置基本行驶参数
+                    self.traffic_manager.vehicle_percentage_speed_difference(vehicle, -30)  # 比限速快30%
+                    self.traffic_manager.auto_lane_change(vehicle, True)  # 启用自动变道
+                    self.traffic_manager.distance_to_leading_vehicle(vehicle, 2.0)  # 跟车距离2米
+
+                    # 如果启用危险模式
+                    if danger:
+                        self.traffic_manager.ignore_lights_percentage(vehicle, 100)
+                        self.traffic_manager.ignore_signs_percentage(vehicle, 100)
+                        self.traffic_manager.ignore_vehicles_percentage(vehicle, 50)
+                    else:
+                        # 正常模式：遵守交通规则
+                        self.traffic_manager.ignore_lights_percentage(vehicle, 0)
+                        self.traffic_manager.ignore_signs_percentage(vehicle, 0)
 
                 vehicles_spawned += 1
 

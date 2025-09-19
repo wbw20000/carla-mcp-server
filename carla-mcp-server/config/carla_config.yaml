@@ -3,8 +3,9 @@ carla:
   executable: "CarlaUE4.exe"
   host: "localhost"
   port: 2000
-  timeout: 30
-  default_quality: "Low"  # Low/Epic
+  timeout: 60              # 服务器启动等待时间（秒）
+  client_timeout: 10.0     # 客户端API调用超时时间（秒）
+  default_quality: "Low"   # Low/Epic
 
 window:
   windowed: true

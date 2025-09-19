@@ -235,9 +235,9 @@ def main():
     print("  - get_simulation_status: 获取状态")
     print()
     print("HTTP endpoints:")
-    print("  - http://localhost:8000/health: 健康检查")
-    print("  - http://localhost:8000/status: 状态查询")
-    print("  - http://localhost:8000/mcp/v1/*: MCP HTTP API")
+    print("  - http://localhost:8002/health: 健康检查")
+    print("  - http://localhost:8002/status: 状态查询")
+    print("  - http://localhost:8002/mcp/v1/*: MCP HTTP API")
     print()
     print("Server starting on HTTP mode...")
 
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     # 检查是否指定HTTP模式
     if "--http" in sys.argv or "--serve-http" in sys.argv:
         # HTTP 服务器模式
-        mcp.run(transport="http", host="localhost", port=8000)
+        mcp.run(transport="http", host="localhost", port=8002)
     else:
         # 默认 stdio 模式，保持向后兼容
         mcp.run()

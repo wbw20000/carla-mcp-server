@@ -86,6 +86,12 @@ def generate_traffic(num_vehicles: int = 30, num_walkers: int = 10, danger: bool
         生成危险驾驶交通: generate_traffic(30, 10, True)
     """
     try:
+        # 确保CARLA已连接
+        if not carla_manager.is_connected():
+            connect_result = carla_manager.connect_to_carla()
+            if connect_result.get("status") != "success":
+                return connect_result
+
         return carla_manager.generate_traffic(num_vehicles, num_walkers, danger)
     except Exception as e:
         return {"status": "error", "message": f"生成交通失败: {str(e)}"}
