@@ -436,41 +436,225 @@ class CarlaManager:
         return walkers_spawned
 
     def clear_all_traffic(self) -> Dict:
-        """清除所有交通参与者"""
+        """清除所有交通参与者 - 稳定优先的保守批量销毁方案"""
+        import time
+        start_time = time.time()
+
+        self.logger.info("=== CLEAR_ALL_TRAFFIC START (保守批量销毁方案) ===")
+        self.logger.info(f"Initial counts: vehicles={len(self.vehicles)}, walkers={len(self.walkers)}, controllers={len(self.walker_controllers)}")
+
+        if not self.world or not self.client:
+            return {"status": "error", "message": "CARLA未连接"}
+
         try:
+            # 记录当前状态
+            initial_counts = {
+                "vehicles": len(self.vehicles),
+                "walkers": len(self.walkers),
+                "controllers": len(self.walker_controllers)
+            }
+
             cleared_count = {"vehicles": 0, "walkers": 0, "controllers": 0}
 
-            # 清除车辆
-            for vehicle in self.vehicles:
-                if vehicle.is_alive:
-                    vehicle.destroy()
-                    cleared_count["vehicles"] += 1
-            self.vehicles.clear()
+            # 阶段1: 停止传感器回调 (如果有的话)
+            self.logger.info("阶段1: 停止传感器回调...")
+            # 注意：当前实现中没有传感器，跳过此步骤
 
-            # 停止并清除行人控制器
-            for controller in self.walker_controllers:
-                if controller.is_alive:
-                    controller.stop()
-                    controller.destroy()
-                    cleared_count["controllers"] += 1
-            self.walker_controllers.clear()
+            # 阶段2: 停止并销毁 Walker 控制器
+            self.logger.info("阶段2: 停止并销毁行人控制器...")
+            if self.walker_controllers:
+                # 先停止所有控制器
+                for controller in self.walker_controllers:
+                    try:
+                        if controller.is_alive:
+                            controller.stop()
+                    except Exception as e:
+                        self.logger.debug(f"停止控制器失败: {e}")
 
-            # 清除行人
-            for walker in self.walkers:
-                if walker.is_alive:
-                    walker.destroy()
-                    cleared_count["walkers"] += 1
-            self.walkers.clear()
+                # 等待停止生效
+                time.sleep(0.05)
+                self.world.tick()
+
+                # 分批销毁控制器
+                cleared_count["controllers"] = self._batch_destroy_actors(
+                    self.walker_controllers, "控制器", batch_size=5
+                )
+                self.walker_controllers.clear()
+
+            # 阶段3: 车辆退出 TrafficManager
+            self.logger.info("阶段3: 车辆退出 TrafficManager...")
+            if self.vehicles and self.traffic_manager:
+                for vehicle in self.vehicles:
+                    try:
+                        if vehicle.is_alive:
+                            vehicle.set_autopilot(False)
+                    except Exception as e:
+                        self.logger.debug(f"禁用自动驾驶失败: {e}")
+
+                time.sleep(0.05)
+                self.world.tick()
+
+            # 阶段4: 分批销毁行人
+            self.logger.info("阶段4: 分批销毁行人...")
+            if self.walkers:
+                cleared_count["walkers"] = self._batch_destroy_actors(
+                    self.walkers, "行人", batch_size=5
+                )
+                self.walkers.clear()
+
+            # 阶段5: 分批销毁车辆
+            self.logger.info("阶段5: 分批销毁车辆...")
+            if self.vehicles:
+                cleared_count["vehicles"] = self._batch_destroy_actors(
+                    self.vehicles, "车辆", batch_size=5
+                )
+                self.vehicles.clear()
+
+            # 阶段6: 冷却期 - tick 多帧
+            self.logger.info("阶段6: 冷却期...")
+            for i in range(60):  # 60帧 ≈ 1秒
+                self.world.tick()
+                if i % 20 == 0:  # 每20帧检查一次
+                    time.sleep(0.02)
+
+            time.sleep(1.0)  # 额外1秒冷却
+
+            # 阶段7: 健康探针
+            self.logger.info("阶段7: 健康探针...")
+            health_check_passed = self._health_check()
+
+            elapsed = time.time() - start_time
+            self.logger.info(f"=== CLEAR_ALL_TRAFFIC END: {elapsed:.3f}s ===")
+            self.logger.info(f"成功清除交通 (cleared: {cleared_count}, health_check: {health_check_passed})")
 
             return {
                 "status": "cleared",
+                "method": "batch_destroy",
                 "cleared": cleared_count,
-                "message": f"清除了 {cleared_count['vehicles']} 辆车, {cleared_count['walkers']} 个行人"
+                "health_check": health_check_passed,
+                "message": f"批量销毁清除了 {cleared_count['vehicles']} 辆车, {cleared_count['walkers']} 个行人, {cleared_count['controllers']} 个控制器"
             }
 
         except Exception as e:
-            self.logger.error(f"Error clearing traffic: {e}")
-            return {"status": "error", "message": str(e)}
+            elapsed = time.time() - start_time
+            self.logger.error(f"=== CLEAR_ALL_TRAFFIC FAILED: {elapsed:.3f}s, Error: {e} ===", exc_info=True)
+
+            # 兜底方案：load_world
+            self.logger.info("批量销毁失败，尝试兜底 load_world 方案...")
+            try:
+                return self._fallback_load_world(initial_counts)
+            except Exception as fallback_error:
+                self.logger.error(f"兜底方案也失败: {fallback_error}")
+
+                # 清空本地列表，避免引用已销毁的对象
+                self.vehicles.clear()
+                self.walkers.clear()
+                self.walker_controllers.clear()
+
+                return {"status": "error", "message": f"批量销毁和兜底方案都失败: {str(e)}"}
+
+    def _batch_destroy_actors(self, actors: List, actor_type: str, batch_size: int = 5) -> int:
+        """分批销毁actors"""
+        import time
+        destroyed_count = 0
+
+        for i in range(0, len(actors), batch_size):
+            batch = actors[i:i+batch_size]
+            self.logger.debug(f"销毁 {actor_type} 批次 {i//batch_size + 1}: {len(batch)} 个")
+
+            # 准备批量销毁命令
+            batch_commands = []
+            for actor in batch:
+                try:
+                    if actor.is_alive:
+                        batch_commands.append(carla.command.DestroyActor(actor.id))
+                except Exception as e:
+                    self.logger.debug(f"检查 {actor_type} 状态失败: {e}")
+
+            if batch_commands:
+                try:
+                    # 执行批量销毁
+                    results = self.client.apply_batch_sync(batch_commands, True)  # do_tick=True
+
+                    # 统计成功销毁的数量
+                    for result in results:
+                        if not result.error:
+                            destroyed_count += 1
+                        else:
+                            self.logger.debug(f"销毁 {actor_type} 失败: {result.error}")
+
+                except Exception as e:
+                    self.logger.error(f"批量销毁 {actor_type} 失败: {e}")
+
+            # 批次间延迟
+            if i + batch_size < len(actors):
+                time.sleep(0.03)  # 30ms
+                self.world.tick()
+
+        self.logger.info(f"{actor_type} 销毁完成: {destroyed_count}/{len(actors)}")
+        return destroyed_count
+
+    def _health_check(self) -> bool:
+        """健康探针检查"""
+        try:
+            # 检查基本连接
+            if not self.client or not self.world:
+                return False
+
+            # 尝试获取世界快照
+            snapshot = self.world.get_snapshot()
+            if snapshot is None:
+                return False
+
+            # 检查地图是否可访问
+            game_map = self.world.get_map()
+            if game_map is None:
+                return False
+
+            # 尝试tick一次
+            self.world.tick()
+
+            self.logger.info("健康检查通过")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"健康检查失败: {e}")
+            return False
+
+    def _fallback_load_world(self, initial_counts: Dict) -> Dict:
+        """兜底方案：load_world"""
+        import time
+
+        self.logger.info("执行兜底 load_world 方案...")
+
+        # 获取当前地图名称和天气
+        current_map_full_name = self.world.get_map().name
+        current_weather = self.world.get_weather()
+        current_map_name = current_map_full_name.split('/')[-1] if '/' in current_map_full_name else current_map_full_name
+
+        # 重新加载世界
+        self.world = self.client.load_world(current_map_name)
+        self.world.set_weather(current_weather)
+
+        # 重新获取TrafficManager
+        self.traffic_manager = self.client.get_trafficmanager(
+            self.config["carla"]["port"] + 6000
+        )
+
+        # 清空列表
+        self.vehicles.clear()
+        self.walkers.clear()
+        self.walker_controllers.clear()
+
+        # 冷却
+        time.sleep(2.0)
+
+        return {
+            "status": "cleared",
+            "method": "fallback_load_world",
+            "cleared": initial_counts,
+            "message": f"兜底方案清除了 {initial_counts['vehicles']} 辆车, {initial_counts['walkers']} 个行人"
+        }
 
     def set_weather(self, weather_preset: str) -> Dict:
         """设置天气"""

@@ -25,8 +25,12 @@ from carla_tools import (
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('carla_mcp_debug.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
 )
 
 # 创建MCP服务器实例
