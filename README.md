@@ -1,3 +1,9 @@
+\#测试GITHUB DESTOP
+
+
+
+
+
 1\. 激活虚拟环境
 
 如果是 PowerShell：
@@ -12,7 +18,7 @@ cd C:\\project2025\\mcpserver
 
 
 
-2\.退出虚拟环境
+2.退出虚拟环境
 
 
 
